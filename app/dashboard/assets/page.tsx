@@ -27,7 +27,6 @@ const AssetCondition = {
   GOOD: "GOOD",
   FAIR: "FAIR",
   POOR: "POOR",
-  DAMAGED: "DAMAGED",
 } as const;
 type AssetCondition = (typeof AssetCondition)[keyof typeof AssetCondition];
 
