@@ -1,0 +1,143 @@
+"use server";
+
+import { db } from "@/lib/db";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
+import { Role, MaintenanceStatus, MaintenancePriority, AssetStatus } from "@prisma/client";
+import { ActionResponse } from "./auth";
+
+// Fetch maintenance requests
+export async function getMaintenanceRequests() {
+  try {
+    return await db.maintenanceRequest.findMany({
+      include: {
+        asset: {
+          select: { id: true, tag: true, name: true, status: true },
+        },
+        raisedBy: {
+          select: { id: true, name: true, email: true },
+        },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+  } catch (error) {
+    console.error("Failed to fetch maintenance requests:", error);
+    return [];
+  }
+}
+
+// Raise a maintenance request (Any Employee)
+export async function createMaintenanceRequest(data: {
+  assetId: string;
+  issueDescription: string;
+  priority: MaintenancePriority;
+  photoUrl?: string;
+}): Promise<ActionResponse> {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session) {
+      return { success: false, message: "Unauthorized. Please log in." };
+    }
+
+    if (!data.assetId || !data.issueDescription.trim()) {
+      return { success: false, message: "Asset and description of issue are required." };
+    }
+
+    const request = await db.maintenanceRequest.create({
+      data: {
+        assetId: data.assetId,
+        raisedById: session.user.id,
+        issueDescription: data.issueDescription.trim(),
+        priority: data.priority,
+        status: MaintenanceStatus.PENDING,
+        photoUrl: data.photoUrl || null,
+      },
+    });
+
+    // Write activity log
+    await db.activityLog.create({
+      data: {
+        userId: session.user.id,
+        action: "RAISE_MAINTENANCE",
+        entityType: "MaintenanceRequest",
+        entityId: request.id,
+        newValues: request,
+      },
+    });
+
+    return { success: true, message: "Maintenance request filed successfully.", data: request };
+  } catch (error) {
+    console.error("Failed to raise maintenance request:", error);
+    return { success: false, message: "Failed to raise maintenance request." };
+  }
+}
+
+// Transition maintenance state (Asset Managers / Admins)
+export async function transitionMaintenance(data: {
+  requestId: string;
+  status: MaintenanceStatus;
+  technicianName?: string;
+  resolutionNotes?: string;
+}): Promise<ActionResponse> {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session || !["ADMIN", "ASSET_MANAGER"].includes(session.user.role)) {
+      return { success: false, message: "Unauthorized. Manager role required." };
+    }
+
+    const current = await db.maintenanceRequest.findUnique({
+      where: { id: data.requestId },
+      include: { asset: true },
+    });
+
+    if (!current) {
+      return { success: false, message: "Maintenance request not found." };
+    }
+
+    const result = await db.$transaction(async (tx) => {
+      // Update request details
+      const request = await tx.maintenanceRequest.update({
+        where: { id: data.requestId },
+        data: {
+          status: data.status,
+          technicianName: data.technicianName || current.technicianName,
+          resolutionNotes: data.resolutionNotes || current.resolutionNotes,
+        },
+      });
+
+      // Update asset status based on request transition rules:
+      // PENDING -> APPROVED: status changes to UNDER_MAINTENANCE
+      // APPROVED -> TECHNICIAN_ASSIGNED -> IN_PROGRESS -> RESOLVED: status reverts to AVAILABLE
+      if (data.status === MaintenanceStatus.APPROVED) {
+        await tx.asset.update({
+          where: { id: current.assetId },
+          data: { status: AssetStatus.UNDER_MAINTENANCE },
+        });
+      } else if (data.status === MaintenanceStatus.RESOLVED || data.status === MaintenanceStatus.CLOSED) {
+        await tx.asset.update({
+          where: { id: current.assetId },
+          data: { status: AssetStatus.AVAILABLE },
+        });
+      }
+
+      // Log action
+      await tx.activityLog.create({
+        data: {
+          userId: session.user.id,
+          action: `TRANSITION_MAINTENANCE_${data.status}`,
+          entityType: "MaintenanceRequest",
+          entityId: data.requestId,
+          previousValues: { status: current.status },
+          newValues: { status: data.status },
+        },
+      });
+
+      return request;
+    });
+
+    return { success: true, message: `Maintenance request transitioned to ${data.status}.`, data: result };
+  } catch (error: any) {
+    console.error("Failed to transition maintenance:", error);
+    return { success: false, message: error.message || "Failed to update maintenance request." };
+  }
+}
