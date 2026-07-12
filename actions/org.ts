@@ -483,38 +483,36 @@ export async function getDepartmentDetails(departmentId: string) {
     const userIds = dept.users.map((u) => u.id);
     const assetIds = dept.assets.map((a) => a.id);
 
-    // Fetch Bookings for department assets
-    const bookings = await db.resourceBooking.findMany({
-      where: { assetId: { in: assetIds } },
-      include: {
-        user: { select: { name: true } },
-        asset: { select: { name: true, tag: true } },
-      },
-      orderBy: { startTime: "desc" },
-    });
-
-    // Fetch Maintenance Requests raised by department users or for department assets
-    const maintenanceReqs = await db.maintenanceRequest.findMany({
-      where: {
-        OR: [
-          { raisedById: { in: userIds } },
-          { assetId: { in: assetIds } },
-        ],
-      },
-      include: {
-        raisedBy: { select: { name: true } },
-        asset: { select: { name: true, tag: true } },
-      },
-      orderBy: { createdAt: "desc" },
-    });
-
-    // Fetch Activity Logs of department members
-    const activityLogs = await db.activityLog.findMany({
-      where: { userId: { in: userIds } },
-      include: { user: { select: { name: true } } },
-      take: 20,
-      orderBy: { timestamp: "desc" },
-    });
+    // Fetch Bookings, Maintenance Requests, and Activity Logs in parallel
+    const [bookings, maintenanceReqs, activityLogs] = await Promise.all([
+      db.resourceBooking.findMany({
+        where: { assetId: { in: assetIds } },
+        include: {
+          user: { select: { name: true } },
+          asset: { select: { name: true, tag: true } },
+        },
+        orderBy: { startTime: "desc" },
+      }),
+      db.maintenanceRequest.findMany({
+        where: {
+          OR: [
+            { raisedById: { in: userIds } },
+            { assetId: { in: assetIds } },
+          ],
+        },
+        include: {
+          raisedBy: { select: { name: true } },
+          asset: { select: { name: true, tag: true } },
+        },
+        orderBy: { createdAt: "desc" },
+      }),
+      db.activityLog.findMany({
+        where: { userId: { in: userIds } },
+        include: { user: { select: { name: true } } },
+        take: 20,
+        orderBy: { timestamp: "desc" },
+      }),
+    ]);
 
     // Format costs for serialization safety
     const formattedAssets = dept.assets.map((asset) => ({

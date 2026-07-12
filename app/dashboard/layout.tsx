@@ -3,8 +3,8 @@ import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import Sidebar from "@/components/layout/sidebar";
 import Navbar from "@/components/layout/navbar";
-import CommandPalette from "@/components/layout/CommandPalette";
 import MobileBottomNav from "@/components/layout/MobileBottomNav";
+import CommandPaletteLoader from "@/components/layout/CommandPaletteLoader";
 
 export default async function DashboardLayout({
   children,
@@ -39,7 +39,7 @@ export default async function DashboardLayout({
       <MobileBottomNav />
 
       {/* Global Keyboard command palette (⌘+K / Ctrl+K) */}
-      <CommandPalette role={session.user.role} />
+      <CommandPaletteLoader />
     </div>
   );
 }

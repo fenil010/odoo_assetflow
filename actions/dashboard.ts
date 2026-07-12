@@ -47,99 +47,102 @@ export async function getDashboardMetrics() {
       activityWhere.userId = session.user.id;
     }
 
-    // 1. Core KPIs
-    const assetsAvailable = await db.asset.count({
-      where: { ...assetWhere, status: AssetStatus.AVAILABLE },
-    });
-
-    const assetsAllocated = await db.asset.count({
-      where: { ...assetWhere, status: AssetStatus.ALLOCATED },
-    });
-
-    const activeBookings = await db.resourceBooking.count({
-      where: bookingWhere,
-    });
-
-    const maintenanceToday = await db.asset.count({
-      where: { ...assetWhere, status: AssetStatus.UNDER_MAINTENANCE },
-    });
-
-    // 2. Overdue return alerts
-    const overdueAllocations = await db.allocation.findMany({
-      where: overdueWhere,
-      include: {
-        asset: { select: { tag: true, name: true } },
-        user: { select: { name: true, email: true } },
-      },
-      orderBy: { expectedReturnDate: "asc" },
-      take: 5,
-    });
-
-    // 3. Recent activity logs (for audit log timeline feed)
-    const recentActivities = await db.activityLog.findMany({
-      where: activityWhere,
-      include: {
-        user: { select: { name: true, role: true } },
-      },
-      orderBy: { timestamp: "desc" },
-      take: 10,
-    });
-
-    // 4. Pending Maintenance Requests requiring manager approval
-    const pendingMaintenance = await db.maintenanceRequest.findMany({
-      where: { ...maintenanceWhere, status: MaintenanceStatus.PENDING },
-      include: {
-        asset: { select: { tag: true, name: true } },
-        raisedBy: { select: { name: true } },
-      },
-      orderBy: { createdAt: "desc" },
-      take: 5,
-    });
-
-    // 5. Role specific counts and lists
-    const myAssets = await db.asset.findMany({
-      where: { currentHolderId: session.user.id, deletedAt: null },
-      select: { id: true, tag: true, name: true, location: true, condition: true },
-    });
+    // Parallelize all count and findMany queries
+    const [
+      assetsAvailable,
+      assetsAllocated,
+      activeBookings,
+      maintenanceToday,
+      overdueAllocations,
+      recentActivities,
+      pendingMaintenance,
+      myAssets,
+      myBookings,
+      myBookingsCount,
+      myRequestsCount,
+      deptEmployeesCount,
+      deptAssetsCount,
+      deptBookingsCount,
+    ] = await Promise.all([
+      db.asset.count({
+        where: { ...assetWhere, status: AssetStatus.AVAILABLE },
+      }),
+      db.asset.count({
+        where: { ...assetWhere, status: AssetStatus.ALLOCATED },
+      }),
+      db.resourceBooking.count({
+        where: bookingWhere,
+      }),
+      db.asset.count({
+        where: { ...assetWhere, status: AssetStatus.UNDER_MAINTENANCE },
+      }),
+      db.allocation.findMany({
+        where: overdueWhere,
+        include: {
+          asset: { select: { tag: true, name: true } },
+          user: { select: { name: true, email: true } },
+        },
+        orderBy: { expectedReturnDate: "asc" },
+        take: 5,
+      }),
+      db.activityLog.findMany({
+        where: activityWhere,
+        include: {
+          user: { select: { name: true, role: true } },
+        },
+        orderBy: { timestamp: "desc" },
+        take: 10,
+      }),
+      db.maintenanceRequest.findMany({
+        where: { ...maintenanceWhere, status: MaintenanceStatus.PENDING },
+        include: {
+          asset: { select: { tag: true, name: true } },
+          raisedBy: { select: { name: true } },
+        },
+        orderBy: { createdAt: "desc" },
+        take: 5,
+      }),
+      db.asset.findMany({
+        where: { currentHolderId: session.user.id, deletedAt: null },
+        select: { id: true, tag: true, name: true, location: true, condition: true },
+      }),
+      db.resourceBooking.findMany({
+        where: {
+          userId: session.user.id,
+          status: { in: [BookingStatus.UPCOMING, BookingStatus.ONGOING] },
+        },
+        include: {
+          asset: { select: { name: true, tag: true } },
+        },
+        orderBy: { startTime: "asc" },
+        take: 5,
+      }),
+      db.resourceBooking.count({
+        where: {
+          userId: session.user.id,
+          status: { in: [BookingStatus.UPCOMING, BookingStatus.ONGOING] },
+        },
+      }),
+      db.maintenanceRequest.count({
+        where: { raisedById: session.user.id },
+      }),
+      role === "DEPARTMENT_HEAD" && departmentId
+        ? db.user.count({ where: { departmentId } })
+        : Promise.resolve(0),
+      role === "DEPARTMENT_HEAD" && departmentId
+        ? db.asset.count({ where: { departmentId, deletedAt: null } })
+        : Promise.resolve(0),
+      role === "DEPARTMENT_HEAD" && departmentId
+        ? db.resourceBooking.count({
+            where: {
+              asset: { departmentId },
+              status: { in: [BookingStatus.UPCOMING, BookingStatus.ONGOING] }
+            }
+          })
+        : Promise.resolve(0),
+    ]);
 
     const myAssetsCount = myAssets.length;
-
-    const myBookings = await db.resourceBooking.findMany({
-      where: {
-        userId: session.user.id,
-        status: { in: [BookingStatus.UPCOMING, BookingStatus.ONGOING] },
-      },
-      include: {
-        asset: { select: { name: true, tag: true } },
-      },
-      orderBy: { startTime: "asc" },
-      take: 5,
-    });
-
-    const myBookingsCount = await db.resourceBooking.count({
-      where: {
-        userId: session.user.id,
-        status: { in: [BookingStatus.UPCOMING, BookingStatus.ONGOING] },
-      },
-    });
-
-    const myRequestsCount = await db.maintenanceRequest.count({
-      where: { raisedById: session.user.id },
-    });
-
-    let deptEmployeesCount = 0;
-    let deptAssetsCount = 0;
-    let deptBookingsCount = 0;
-    if (role === "DEPARTMENT_HEAD" && departmentId) {
-      deptEmployeesCount = await db.user.count({ where: { departmentId } });
-      deptAssetsCount = await db.asset.count({ where: { departmentId, deletedAt: null } });
-      deptBookingsCount = await db.resourceBooking.count({
-        where: {
-          asset: { departmentId },
-          status: { in: [BookingStatus.UPCOMING, BookingStatus.ONGOING] }
-        }
-      });
-    }
 
     // Fetch upcoming and overdue schedules counts
     let schedulesAlertsCount = 0;
