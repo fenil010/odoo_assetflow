@@ -7,6 +7,7 @@ import { NotificationBell } from "@/features/notifications/components/Notificati
 import { Menu, User as UserIcon, LogOut, Settings as SettingsIcon, HelpCircle } from "lucide-react";
 import { useSidebarStore } from "@/store/use-sidebar-store";
 import { cn } from "@/lib/utils";
+import GlobalSearch from "@/components/dashboard/GlobalSearch";
 
 interface NavbarProps {
   user: any;
@@ -42,6 +43,11 @@ export default function Navbar({ user }: NavbarProps) {
         <span className="text-lg font-black text-zinc-950 md:hidden tracking-wider">
           ASSET<span className="text-zinc-500 font-medium">FLOW</span>
         </span>
+      </div>
+
+      {/* Global Search trigger */}
+      <div className="hidden md:block ml-6 flex-1 max-w-xs select-none">
+        <GlobalSearch />
       </div>
 
       {/* Right Actions */}

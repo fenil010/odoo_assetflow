@@ -8,6 +8,7 @@ const ASSETS_TO_CACHE = [
 
 // Install Service Worker
 self.addEventListener("install", (e) => {
+  self.skipWaiting();
   e.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
       return cache.addAll(ASSETS_TO_CACHE);
@@ -15,14 +16,27 @@ self.addEventListener("install", (e) => {
   );
 });
 
+// Activate Service Worker
+self.addEventListener("activate", (e) => {
+  e.waitUntil(clients.claim());
+});
+
 // Cache intercept fetch
 self.addEventListener("fetch", (e) => {
   e.respondWith(
     caches.match(e.request).then((cachedResponse) => {
       if (cachedResponse) {
+        if (cachedResponse.redirected) {
+          return Response.redirect(cachedResponse.url, 307);
+        }
         return cachedResponse;
       }
-      return fetch(e.request).catch(() => {
+      return fetch(e.request).then((response) => {
+        if (response.redirected) {
+          return Response.redirect(response.url, 307);
+        }
+        return response;
+      }).catch(() => {
         // Fallback for API offline loads
         return new Response("AssetFlow Offline Service Active: Server connection disconnected.", {
           status: 503,

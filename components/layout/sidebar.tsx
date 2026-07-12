@@ -21,6 +21,7 @@ import {
   Info,
   CheckSquare,
   Sparkles,
+  Truck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { hasPermission, SystemResource, ResourceAction } from "@/lib/permissions";
@@ -70,6 +71,13 @@ export default function Sidebar({ role }: SidebarProps) {
       action: "READ",
     },
     {
+      title: "Vendors",
+      href: "/dashboard/vendors",
+      icon: Truck,
+      resource: "VENDORS",
+      action: "READ",
+    },
+    {
       title: "Maintenance",
       href: "/dashboard/maintenance",
       icon: Wrench,
@@ -101,6 +109,13 @@ export default function Sidebar({ role }: SidebarProps) {
       title: "Reports & Analytics",
       href: "/dashboard/reports",
       icon: BarChart3,
+      resource: "REPORTS",
+      action: "READ",
+    },
+    {
+      title: "Intelligence Hub",
+      href: "/dashboard/intelligence",
+      icon: Sparkles,
       resource: "REPORTS",
       action: "READ",
     },

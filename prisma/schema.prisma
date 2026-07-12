@@ -108,6 +108,7 @@ model User {
   auditedCycles     Auditor[]
   verifiedItems     AuditItem[]
   activityLogs      ActivityLog[]
+  uploadedDocuments AssetDocument[]
 
   createdAt      DateTime    @default(now()) @map("created_at")
   updatedAt      DateTime    @updatedAt @map("updated_at")
@@ -173,11 +174,16 @@ model Asset {
   departmentId     String?           @map("department_id")
   department       Department?       @relation(fields: [departmentId], references: [id], onDelete: SetNull)
   deletedAt        DateTime?         @map("deleted_at")
+  vendorId         String?           @map("vendor_id")
+  vendor           Vendor?           @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  warranty         Int?              @default(24) // Warranty in months
 
   allocations      Allocation[]
   bookings         ResourceBooking[]
   maintenanceReqs  MaintenanceRequest[]
   auditItems       AuditItem[]
+  documentsMetadata AssetDocument[]
+  maintenanceSchedules MaintenanceSchedule[]
 
   createdAt        DateTime          @default(now()) @map("created_at")
   updatedAt        DateTime          @updatedAt @map("updated_at")
@@ -185,6 +191,7 @@ model Asset {
   @@index([status])
   @@index([categoryId])
   @@index([departmentId])
+  @@index([vendorId])
   @@map("assets")
 }
 
@@ -339,4 +346,68 @@ model Notification {
 
   @@index([userId, isRead])
   @@map("notifications")
+}
+
+model Vendor {
+  id            String    @id @default(uuid())
+  companyName   String    @unique @map("company_name")
+  contactPerson String    @map("contact_person")
+  email         String
+  phone         String
+  gstNumber     String?   @map("gst_number")
+  website       String?
+  address       String?
+  notes         String?
+  status        String    @default("ACTIVE") // ACTIVE, INACTIVE
+  deletedAt     DateTime? @map("deleted_at")
+
+  assets        Asset[]
+
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  @@map("vendors")
+}
+
+model MaintenanceSchedule {
+  id                  String    @id @default(uuid())
+  assetId             String    @map("asset_id")
+  asset               Asset     @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  maintenanceType     String    @map("maintenance_type")
+  frequency           String    @map("frequency") // WEEKLY, MONTHLY, QUARTERLY, EVERY_6_MONTHS, YEARLY, CUSTOM
+  customIntervalDays  Int?      @map("custom_interval_days")
+  nextDueDate         DateTime  @map("next_due_date")
+  lastMaintenanceDate DateTime? @map("last_maintenance_date")
+  technician          String
+  estimatedCost       Decimal   @map("estimated_cost") @db.Decimal(12, 2)
+  checklist           String[]
+  notes               String?
+  status              String    @default("ACTIVE") // ACTIVE, PAUSED, INACTIVE
+
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  @@index([assetId])
+  @@index([nextDueDate])
+  @@map("maintenance_schedules")
+}
+
+model AssetDocument {
+  id           String   @id @default(uuid())
+  assetId      String   @map("asset_id")
+  asset        Asset    @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  fileName     String   @map("file_name")
+  documentType String   @map("document_type") // Purchase Invoice, Warranty Card, Insurance Certificate, User Manual, Compliance Certificate
+  fileMime     String   @map("file_mime")     // e.g. application/pdf, image/png
+  filePath     String   @map("file_path")     // relative url / disk name
+  fileSize     Int      @map("file_size")     // in bytes
+  uploadedById String   @map("uploaded_by_id")
+  uploadedBy   User     @relation(fields: [uploadedById], references: [id], onDelete: Restrict)
+
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@index([assetId])
+  @@index([uploadedById])
+  @@map("asset_documents")
 }

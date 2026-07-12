@@ -135,6 +135,55 @@ export async function getDashboardMetrics() {
       deptAssetsCount = await db.asset.count({ where: { departmentId, deletedAt: null } });
     }
 
+    // Fetch upcoming and overdue schedules counts
+    let schedulesAlertsCount = 0;
+    let upcomingSchedules: any[] = [];
+
+    if (["ADMIN", "ASSET_MANAGER"].includes(role)) {
+      const activeSchedules = await db.maintenanceSchedule.findMany({
+        where: {
+          status: "ACTIVE",
+          nextDueDate: { lte: now }
+        },
+        include: {
+          asset: { select: { tag: true, name: true } }
+        },
+        orderBy: { nextDueDate: "asc" },
+        take: 5
+      });
+      upcomingSchedules = activeSchedules.map(s => ({
+        ...s,
+        estimatedCost: Number(s.estimatedCost.toString())
+      }));
+      schedulesAlertsCount = await db.maintenanceSchedule.count({
+        where: { status: "ACTIVE", nextDueDate: { lte: now } }
+      });
+    } else if (role === "EMPLOYEE") {
+      const activeSchedules = await db.maintenanceSchedule.findMany({
+        where: {
+          status: "ACTIVE",
+          nextDueDate: { lte: now },
+          asset: { currentHolderId: session.user.id }
+        },
+        include: {
+          asset: { select: { tag: true, name: true } }
+        },
+        orderBy: { nextDueDate: "asc" },
+        take: 5
+      });
+      upcomingSchedules = activeSchedules.map(s => ({
+        ...s,
+        estimatedCost: Number(s.estimatedCost.toString())
+      }));
+      schedulesAlertsCount = await db.maintenanceSchedule.count({
+        where: {
+          status: "ACTIVE",
+          nextDueDate: { lte: now },
+          asset: { currentHolderId: session.user.id }
+        }
+      });
+    }
+
     return JSON.parse(
       JSON.stringify({
         kpis: {
@@ -156,6 +205,10 @@ export async function getDashboardMetrics() {
         deptStats: {
           employeesCount: deptEmployeesCount,
           assetsCount: deptAssetsCount,
+        },
+        preventiveAlerts: {
+          count: schedulesAlertsCount,
+          schedules: upcomingSchedules
         }
       })
     );

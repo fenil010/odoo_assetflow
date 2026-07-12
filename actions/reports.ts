@@ -385,6 +385,71 @@ export async function triggerSmartReminders(): Promise<{ success: boolean; count
       }
     }
 
+    // C. Scan active maintenance schedules for alerts: due today, due in 7 days, or overdue
+    const activeSchedules = await db.maintenanceSchedule.findMany({
+      where: { status: "ACTIVE" },
+      include: { asset: true }
+    });
+
+    const adminsAndManagers = await db.user.findMany({
+      where: {
+        role: { in: ["ADMIN", "ASSET_MANAGER"] },
+        status: "ACTIVE"
+      },
+      select: { id: true }
+    });
+
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+
+    for (const schedule of activeSchedules) {
+      const dueDate = new Date(schedule.nextDueDate);
+      const startOfDue = new Date(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate());
+
+      // Calculate difference in days (whole days)
+      const diffTime = startOfDue.getTime() - startOfToday.getTime();
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+      let alertType = ""; 
+      let alertMsg = "";
+
+      if (startOfDue < startOfToday) {
+        alertType = "OVERDUE";
+        alertMsg = `Preventive Maintenance is OVERDUE for asset [${schedule.asset.tag}] ${schedule.asset.name}. (Scheduled: ${schedule.maintenanceType}, Due: ${dueDate.toLocaleDateString()})`;
+      } else if (startOfDue >= startOfToday && startOfDue <= endOfToday) {
+        alertType = "TODAY";
+        alertMsg = `Preventive Maintenance is due TODAY for asset [${schedule.asset.tag}] ${schedule.asset.name}. (Scheduled: ${schedule.maintenanceType})`;
+      } else if (diffDays === 7) {
+        alertType = "7DAYS";
+        alertMsg = `Upcoming Preventive Maintenance: Asset [${schedule.asset.tag}] ${schedule.asset.name} is due in 7 days. (Scheduled: ${schedule.maintenanceType}, Date: ${dueDate.toLocaleDateString()})`;
+      }
+
+      if (alertMsg) {
+        // Broadcast notification to all admins/managers
+        for (const recipient of adminsAndManagers) {
+          const existingNotif = await db.notification.findFirst({
+            where: {
+              userId: recipient.id,
+              type: "MAINTENANCE_SCHEDULE",
+              message: { contains: `${schedule.id}-${alertType}` }
+            }
+          });
+
+          if (!existingNotif) {
+            await db.notification.create({
+              data: {
+                userId: recipient.id,
+                title: alertType === "OVERDUE" ? "Maintenance Overdue!" : alertType === "TODAY" ? "Maintenance Due Today" : "Upcoming Maintenance Schedule",
+                message: `${alertMsg} [Ref: ${schedule.id}-${alertType}]`,
+                type: "MAINTENANCE_SCHEDULE",
+              }
+            });
+            reminderCount++;
+          }
+        }
+      }
+    }
+
     return { success: true, count: reminderCount };
   } catch (err) {
     console.error("Smart Reminder Engine failed:", err);

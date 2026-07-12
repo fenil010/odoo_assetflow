@@ -1,21 +1,31 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useSession } from "next-auth/react";
 import { useParams, useRouter } from "next/navigation";
 import { 
   Package, Calendar, Wrench, Shield, Undo2, ArrowLeft,
   DollarSign, Clock, FileText, Image as ImageIcon, MessageSquare, 
-  Paperclip, ShieldAlert, Award, Tag, Activity, Settings, Info, User
+  Paperclip, ShieldAlert, Award, Tag, Activity, Settings, Info, User,
+  Plus, X, Download, Eye, Trash2, Upload, RefreshCw
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { getAssetDetails, getAssets } from "@/actions/assets";
-import { getAssetActivityLogs, addAssetActivityLog } from "@/actions/assets";
+import { getAssetDetails, getAssets, getAssetActivityLogs, addAssetActivityLog, updateAsset } from "@/actions/assets";
+import { getCategories, getDepartments } from "@/actions/org";
+import { getVendors } from "@/actions/vendors";
+import { 
+  getAssetDocuments, 
+  uploadAssetDocument, 
+  replaceAssetDocument, 
+  deleteAssetDocument, 
+  logDocumentDownload 
+} from "@/actions/documents";
+import { getAssetDepreciation, getAssetTimeline } from "@/actions/intelligence";
 import Link from "next/link";
 
-type TabType = "overview" | "financials" | "schedules" | "audit" | "discussion";
+type TabType = "overview" | "financials" | "schedules" | "audit" | "discussion" | "documents";
 
 export default function AssetDetailsPage() {
   const { id } = useParams() as { id: string };
@@ -32,11 +42,115 @@ export default function AssetDetailsPage() {
   const [commentText, setCommentText] = useState("");
   const [noteText, setNoteText] = useState("");
   const [activeTab, setActiveTab] = useState<TabType>("overview");
+
+  // Document management states
+  const [documents, setDocuments] = useState<any[]>([]);
+  const [docUploadType, setDocUploadType] = useState("Purchase Invoice");
+  const [docFile, setDocFile] = useState<File | null>(null);
+  const [docReplacingId, setDocReplacingId] = useState<string | null>(null);
+  const [previewDoc, setPreviewDoc] = useState<any>(null);
+
+  // Timeline and Depreciation states
+  const [depreciationData, setDepreciationData] = useState<any>(null);
+  const [timelineEvents, setTimelineEvents] = useState<any[]>([]);
   
   // Quick Actions Statuses
   const [submitting, setSubmitting] = useState(false);
   const [msgError, setMsgError] = useState("");
   const [msgSuccess, setMsgSuccess] = useState("");
+
+  // Setup data lists
+  const [categories, setCategories] = useState<any[]>([]);
+  const [departments, setDepartments] = useState<any[]>([]);
+  const [vendors, setVendors] = useState<any[]>([]);
+
+  // Edit Modal States
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editName, setEditName] = useState("");
+  const [editCategoryId, setEditCategoryId] = useState("");
+  const [editSerialNumber, setEditSerialNumber] = useState("");
+  const [editAcquisitionDate, setEditAcquisitionDate] = useState("");
+  const [editAcquisitionCost, setEditAcquisitionCost] = useState("");
+  const [editLocation, setEditLocation] = useState("");
+  const [editCondition, setEditCondition] = useState<any>("NEW");
+  const [editStatus, setEditStatus] = useState<any>("AVAILABLE");
+  const [editIsSharedResource, setEditIsSharedResource] = useState(false);
+  const [editDepartmentId, setEditDepartmentId] = useState("");
+  const [editVendorId, setEditVendorId] = useState("");
+  const [editWarranty, setEditWarranty] = useState<number>(24);
+  const [editImages, setEditImages] = useState<string[]>([]);
+
+  const editFileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const loadSetupData = async () => {
+      try {
+        const [cats, depts, vends] = await Promise.all([
+          getCategories(),
+          getDepartments(),
+          getVendors({ status: "ACTIVE" })
+        ]);
+        setCategories(cats || []);
+        setDepartments(depts || []);
+        setVendors(vends || []);
+      } catch (err) {
+        console.error(err);
+      }
+    };
+    loadSetupData();
+  }, []);
+
+  const handleEditImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+
+    Array.from(files).forEach((file) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        if (reader.result) {
+          setEditImages((prev) => [...prev, reader.result as string]);
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleUpdateAsset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSubmitting(true);
+    setMsgError("");
+    setMsgSuccess("");
+
+    try {
+      const res = await updateAsset(id, {
+        name: editName,
+        categoryId: editCategoryId,
+        serialNumber: editSerialNumber,
+        acquisitionDate: new Date(editAcquisitionDate),
+        acquisitionCost: parseFloat(editAcquisitionCost),
+        condition: editCondition,
+        location: editLocation,
+        images: editImages,
+        isSharedResource: editIsSharedResource,
+        departmentId: editDepartmentId || null,
+        vendorId: editVendorId || null,
+        warranty: editWarranty ? parseInt(editWarranty.toString(), 10) : 24,
+        status: editStatus,
+      });
+
+      if (res.success) {
+        setMsgSuccess(res.message || "Asset updated successfully.");
+        setShowEditModal(false);
+        await loadAssetDetails();
+      } else {
+        setMsgError(res.message || "Failed to update asset.");
+      }
+    } catch (err: any) {
+      setMsgError(err.message || "An unexpected error occurred.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   const loadAssetDetails = async () => {
     setLoading(true);
@@ -48,12 +162,34 @@ export default function AssetDetailsPage() {
       }
       setAsset(data);
 
-      // Fetch logs and related
-      const [logs, allAssets] = await Promise.all([
+      // Pre-populate edit states
+      setEditName(data.name);
+      setEditCategoryId(data.categoryId);
+      setEditSerialNumber(data.serialNumber);
+      setEditAcquisitionCost(data.acquisitionCost.toString());
+      setEditLocation(data.location);
+      setEditCondition(data.condition);
+      setEditStatus(data.status);
+      setEditIsSharedResource(data.isSharedResource);
+      setEditDepartmentId(data.departmentId || "");
+      setEditVendorId(data.vendorId || "");
+      setEditWarranty(data.warranty || 24);
+      setEditImages(data.images || []);
+      const formattedDate = data.acquisitionDate ? new Date(data.acquisitionDate).toISOString().split("T")[0] : "";
+      setEditAcquisitionDate(formattedDate);
+
+      // Fetch logs, related, documents, timeline and depreciation
+      const [logs, allAssets, docs, depData, timelineData] = await Promise.all([
         getAssetActivityLogs(id),
-        getAssets({ categoryId: data.categoryId })
+        getAssets({ categoryId: data.categoryId }),
+        getAssetDocuments(id),
+        getAssetDepreciation(id),
+        getAssetTimeline(id),
       ]);
       setActivityLogs(logs || []);
+      setDocuments(docs || []);
+      setDepreciationData(depData);
+      setTimelineEvents(timelineData || []);
       
       // Filter out current asset from related list
       const filteredRelated = (allAssets || [])
@@ -108,6 +244,148 @@ export default function AssetDetailsPage() {
     }
   };
 
+  const handleUploadDoc = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!docFile) return;
+    setSubmitting(true);
+    setMsgError("");
+    setMsgSuccess("");
+
+    try {
+      const allowedExts = [".pdf", ".png", ".jpg", ".jpeg", ".webp", ".docx", ".xlsx"];
+      const ext = docFile.name.substring(docFile.name.lastIndexOf(".")).toLowerCase();
+      if (!allowedExts.includes(ext)) {
+        setMsgError("Unsupported file format. Only PDF, DOCX, XLSX and Images are supported.");
+        setSubmitting(false);
+        return;
+      }
+      if (docFile.size > 10 * 1024 * 1024) {
+        setMsgError("File size exceeds 10MB limit.");
+        setSubmitting(false);
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append("assetId", id);
+      formData.append("documentType", docUploadType);
+      formData.append("file", docFile);
+
+      const res = await uploadAssetDocument(formData);
+      if (res.success) {
+        setMsgSuccess(res.message || "Document uploaded.");
+        setDocFile(null);
+        // Reset file input
+        const fileInput = document.getElementById("docFileInput") as HTMLInputElement;
+        if (fileInput) fileInput.value = "";
+        const docs = await getAssetDocuments(id);
+        setDocuments(docs);
+      } else {
+        setMsgError(res.message || "Failed to upload.");
+      }
+    } catch (err: any) {
+      setMsgError(err.message || "An error occurred.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleReplaceDoc = async (documentId: string, file: File) => {
+    setSubmitting(true);
+    setMsgError("");
+    setMsgSuccess("");
+
+    try {
+      const allowedExts = [".pdf", ".png", ".jpg", ".jpeg", ".webp", ".docx", ".xlsx"];
+      const ext = file.name.substring(file.name.lastIndexOf(".")).toLowerCase();
+      if (!allowedExts.includes(ext)) {
+        setMsgError("Unsupported file format.");
+        setSubmitting(false);
+        return;
+      }
+      if (file.size > 10 * 1024 * 1024) {
+        setMsgError("File exceeds 10MB limit.");
+        setSubmitting(false);
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const res = await replaceAssetDocument(documentId, formData);
+      if (res.success) {
+        setMsgSuccess(res.message || "Document replaced.");
+        setDocReplacingId(null);
+        const docs = await getAssetDocuments(id);
+        setDocuments(docs);
+      } else {
+        setMsgError(res.message || "Failed to replace.");
+      }
+    } catch (err: any) {
+      setMsgError(err.message || "An error occurred.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleDeleteDoc = async (documentId: string) => {
+    if (!confirm("Are you sure you want to delete this document?")) return;
+    setSubmitting(true);
+    setMsgError("");
+    setMsgSuccess("");
+
+    try {
+      const res = await deleteAssetDocument(documentId);
+      if (res.success) {
+        setMsgSuccess(res.message || "Document deleted.");
+        const docs = await getAssetDocuments(id);
+        setDocuments(docs);
+      } else {
+        setMsgError(res.message || "Failed to delete.");
+      }
+    } catch (err: any) {
+      setMsgError(err.message || "An error occurred.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleDownloadDoc = async (doc: any) => {
+    try {
+      await logDocumentDownload(doc.id);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const getTimelineBadge = (type: string) => {
+    switch (type) {
+      case "Created":
+        return { bg: "bg-blue-50 text-blue-700 border-blue-200", icon: <Package className="h-3.5 w-3.5" /> };
+      case "Allocated":
+        return { bg: "bg-purple-50 text-purple-700 border-purple-200", icon: <User className="h-3.5 w-3.5" /> };
+      case "Returned":
+        return { bg: "bg-emerald-50 text-emerald-700 border-emerald-200", icon: <Undo2 className="h-3.5 w-3.5" /> };
+      case "Booked":
+        return { bg: "bg-indigo-50 text-indigo-700 border-indigo-200", icon: <Calendar className="h-3.5 w-3.5" /> };
+      case "Transfer Requested":
+        return { bg: "bg-amber-50 text-amber-700 border-amber-200", icon: <Activity className="h-3.5 w-3.5" /> };
+      case "Transfer Approved":
+        return { bg: "bg-emerald-50 text-emerald-700 border-emerald-200", icon: <Award className="h-3.5 w-3.5" /> };
+      case "Maintenance":
+        return { bg: "bg-rose-50 text-rose-700 border-rose-200", icon: <Wrench className="h-3.5 w-3.5" /> };
+      case "Audit":
+        return { bg: "bg-violet-50 text-violet-700 border-violet-200", icon: <Shield className="h-3.5 w-3.5" /> };
+      case "Warranty Expired":
+        return { bg: "bg-red-50 text-red-700 border-red-200", icon: <Clock className="h-3.5 w-3.5" /> };
+      case "Retired":
+        return { bg: "bg-zinc-100 text-zinc-800 border-zinc-300", icon: <X className="h-3.5 w-3.5" /> };
+      case "Disposed":
+        return { bg: "bg-red-100 text-red-800 border-red-300", icon: <Trash2 className="h-3.5 w-3.5" /> };
+      default:
+        return { bg: "bg-zinc-50 text-zinc-700 border-zinc-200", icon: <Info className="h-3.5 w-3.5" /> };
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex h-screen items-center justify-center">
@@ -136,7 +414,7 @@ export default function AssetDetailsPage() {
 
   // Warranty Countdown
   const warrantyExpirationDate = new Date(asset.acquisitionDate);
-  warrantyExpirationDate.setFullYear(warrantyExpirationDate.getFullYear() + 3); // 3-year warranty default
+  warrantyExpirationDate.setMonth(warrantyExpirationDate.getMonth() + (asset.warranty || 24));
   const isWarrantyActive = warrantyExpirationDate > new Date();
   const warrantyDaysLeft = Math.ceil((warrantyExpirationDate.getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24));
 
@@ -153,17 +431,43 @@ export default function AssetDetailsPage() {
             <h1 className="text-2xl font-black text-zinc-950 tracking-tight">{asset.name}</h1>
             <span className="text-[10px] font-mono font-bold bg-zinc-100 px-2 py-0.5 border border-zinc-200 rounded">{asset.tag}</span>
             <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold border ${
-              asset.status === "AVAILABLE" ? "bg-zinc-100 text-zinc-900 border-zinc-200" : "bg-zinc-900 text-white border-transparent"
+              asset.status === "AVAILABLE" ? "bg-green-50 border-green-200 text-green-755 font-black" : "bg-zinc-950 text-white border-transparent"
             }`}>
               {asset.status.replace("_", " ")}
             </span>
           </div>
         </div>
+        {["ADMIN", "ASSET_MANAGER"].includes(session?.user?.role || "") && (
+          <Button
+            onClick={() => {
+              setEditName(asset.name);
+              setEditCategoryId(asset.categoryId);
+              setEditSerialNumber(asset.serialNumber);
+              setEditAcquisitionCost(asset.acquisitionCost.toString());
+              setEditLocation(asset.location);
+              setEditCondition(asset.condition);
+              setEditStatus(asset.status);
+              setEditIsSharedResource(asset.isSharedResource);
+              setEditDepartmentId(asset.departmentId || "");
+              setEditVendorId(asset.vendorId || "");
+              setEditWarranty(asset.warranty || 24);
+              setEditImages(asset.images || []);
+              const formattedDate = asset.acquisitionDate ? new Date(asset.acquisitionDate).toISOString().split("T")[0] : "";
+              setEditAcquisitionDate(formattedDate);
+              setShowEditModal(true);
+              setMsgError("");
+              setMsgSuccess("");
+            }}
+            className="bg-zinc-950 hover:bg-zinc-900 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 h-9 shrink-0 cursor-pointer self-start sm:self-center"
+          >
+            <Settings className="h-4 w-4" /> Edit Asset Details
+          </Button>
+        )}
       </div>
 
       {/* Tabs list (Glassmorphism design) */}
       <div className="flex border-b border-zinc-200 overflow-x-auto gap-4 scrollbar-none select-none">
-        {(["overview", "financials", "schedules", "audit", "discussion"] as TabType[]).map((tab) => (
+        {(["overview", "financials", "schedules", "audit", "discussion", "documents"] as TabType[]).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -250,6 +554,22 @@ export default function AssetDetailsPage() {
                     <span className="text-zinc-500 font-medium">Shared Resource Type</span>
                     <span className="font-bold text-zinc-900">{asset.isSharedResource ? "Bookable Space" : "Assigned Device"}</span>
                   </div>
+                  <div className="flex justify-between border-b border-zinc-100 pb-2">
+                    <span className="text-zinc-500 font-medium">Vendor Partner</span>
+                    <span className="font-bold text-zinc-900 text-right truncate max-w-[150px]">
+                      {asset.vendor ? (
+                        <Link href={`/dashboard/vendors/${asset.vendor.id}`} className="text-indigo-600 hover:underline font-bold">
+                          {asset.vendor.companyName}
+                        </Link>
+                      ) : (
+                        "None"
+                      )}
+                    </span>
+                  </div>
+                  <div className="flex justify-between border-b border-zinc-100 pb-2">
+                    <span className="text-zinc-500 font-medium">Warranty Duration</span>
+                    <span className="font-bold text-zinc-900">{asset.warranty || 24} Months</span>
+                  </div>
                 </div>
               </div>
 
@@ -281,40 +601,112 @@ export default function AssetDetailsPage() {
           {activeTab === "financials" && (
             <div className="space-y-6">
               
-              {/* Depreciation Summary */}
-              <div className="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm">
-                <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-4 flex items-center gap-1.5">
-                  <DollarSign className="h-4 w-4" /> Straight-Line Depreciation Ledger
-                </h3>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-6 mb-6">
-                  <div className="space-y-1">
-                    <span className="text-[10px] font-bold text-zinc-400 block uppercase">Initial Cost</span>
-                    <span className="text-lg font-black text-zinc-900">${acqCost.toFixed(2)}</span>
-                  </div>
-                  <div className="space-y-1">
-                    <span className="text-[10px] font-bold text-zinc-400 block uppercase">Useful Life</span>
-                    <span className="text-lg font-black text-zinc-900">{usefulLifeYears} Years</span>
-                  </div>
-                  <div className="space-y-1">
-                    <span className="text-[10px] font-bold text-zinc-400 block uppercase">Depreciation Rate</span>
-                    <span className="text-lg font-black text-zinc-900">18.00% / Yr</span>
-                  </div>
-                  <div className="space-y-1">
-                    <span className="text-[10px] font-bold text-zinc-400 block uppercase">Salvage Value</span>
-                    <span className="text-lg font-black text-zinc-900">${salvageValue.toFixed(2)}</span>
+              {/* Depreciation Summary Widget supporting SL and WDV */}
+              <div className="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm space-y-6 select-none">
+                <div className="flex justify-between items-center border-b border-zinc-100 pb-3">
+                  <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-wider flex items-center gap-1.5">
+                    <DollarSign className="h-4 w-4" /> Multi-Method Asset Depreciation Ledger
+                  </h3>
+                  <div className="text-[10px] font-bold bg-zinc-100 text-zinc-800 px-2 py-0.5 rounded border border-zinc-200 uppercase">
+                    {depreciationData ? `Elapsed Months: ${depreciationData.elapsedMonths}` : ""}
                   </div>
                 </div>
 
-                <div className="space-y-3 border-t border-zinc-100 pt-4 text-xs">
-                  <div className="flex justify-between">
-                    <span className="text-zinc-500 font-medium">Accumulated Depreciation</span>
-                    <span className="font-bold text-red-650">${accumulatedDepreciation.toFixed(2)}</span>
+                {depreciationData ? (
+                  <div className="space-y-6 text-xs">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 bg-zinc-50/50 p-4 rounded-xl border border-zinc-150">
+                      <div>
+                        <span className="text-[9px] font-black text-zinc-400 block uppercase">Acquisition Cost</span>
+                        <span className="text-base font-black text-zinc-950">${depreciationData.cost.toFixed(2)}</span>
+                      </div>
+                      <div>
+                        <span className="text-[9px] font-black text-zinc-400 block uppercase">Salvage Value (10%)</span>
+                        <span className="text-base font-black text-zinc-950">${depreciationData.salvageValue.toFixed(2)}</span>
+                      </div>
+                      <div>
+                        <span className="text-[9px] font-black text-zinc-400 block uppercase">Useful Life</span>
+                        <span className="text-base font-black text-zinc-950">{depreciationData.usefulLifeYears} Years</span>
+                      </div>
+                      <div>
+                        <span className="text-[9px] font-black text-zinc-400 block uppercase">WDV Rate / SL Rate</span>
+                        <span className="text-base font-black text-zinc-950">20% / 18%</span>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      {/* Method A: Straight Line */}
+                      <div className="border border-zinc-200 rounded-xl p-4 bg-white shadow-sm space-y-3.5">
+                        <div className="font-bold text-zinc-950 border-b border-zinc-100 pb-2">Straight Line (SL) Method</div>
+                        <div className="space-y-2">
+                          <div className="flex justify-between">
+                            <span className="text-zinc-500 font-medium">Current Book Value:</span>
+                            <span className="font-black text-emerald-800">${depreciationData.straightLine.currentValue.toFixed(2)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-zinc-500 font-medium">Accumulated Dep:</span>
+                            <span className="font-bold text-red-650">${depreciationData.straightLine.accumulatedDepreciation.toFixed(2)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-zinc-500 font-medium">Remaining Value:</span>
+                            <span className="font-bold text-zinc-800">${depreciationData.straightLine.remainingValue.toFixed(2)}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Method B: Written Down Value */}
+                      <div className="border border-zinc-200 rounded-xl p-4 bg-white shadow-sm space-y-3.5">
+                        <div className="font-bold text-zinc-950 border-b border-zinc-100 pb-2">Written Down Value (WDV) Method</div>
+                        <div className="space-y-2">
+                          <div className="flex justify-between">
+                            <span className="text-zinc-500 font-medium">Current Book Value:</span>
+                            <span className="font-black text-emerald-800">${depreciationData.wdv.currentValue.toFixed(2)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-zinc-500 font-medium">Accumulated Dep:</span>
+                            <span className="font-bold text-red-650">${depreciationData.wdv.accumulatedDepreciation.toFixed(2)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-zinc-500 font-medium">Remaining Value:</span>
+                            <span className="font-bold text-zinc-800">${depreciationData.wdv.remainingValue.toFixed(2)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Projection Schedules Tables */}
+                    <div className="space-y-3 pt-3 border-t border-zinc-100">
+                      <div className="font-bold text-zinc-900 uppercase text-[10px] tracking-wider text-zinc-450">Yearly Depreciated Projections Schedule</div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div className="border border-zinc-200 rounded-lg overflow-hidden">
+                          <div className="bg-zinc-50 text-[10px] font-black uppercase text-zinc-500 py-1.5 px-3 border-b border-zinc-200">Straight Line Projection</div>
+                          <div className="divide-y divide-zinc-100 px-3 py-1 font-semibold text-[11px]">
+                            {depreciationData.straightLine.schedule.map((item: any) => (
+                              <div key={item.year} className="flex justify-between py-1.5">
+                                <span className="text-zinc-500">Year {item.year}</span>
+                                <span className="text-zinc-850">${item.remainingValue.toFixed(2)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="border border-zinc-200 rounded-lg overflow-hidden">
+                          <div className="bg-zinc-50 text-[10px] font-black uppercase text-zinc-500 py-1.5 px-3 border-b border-zinc-200">WDV Projection</div>
+                          <div className="divide-y divide-zinc-100 px-3 py-1 font-semibold text-[11px]">
+                            {depreciationData.wdv.schedule.map((item: any) => (
+                              <div key={item.year} className="flex justify-between py-1.5">
+                                <span className="text-zinc-500">Year {item.year}</span>
+                                <span className="text-zinc-850">${item.remainingValue.toFixed(2)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
                   </div>
-                  <div className="flex justify-between">
-                    <span className="text-zinc-500 font-medium">Book Value (Current Valuation)</span>
-                    <span className="font-bold text-emerald-800">${bookValue.toFixed(2)}</span>
-                  </div>
-                </div>
+                ) : (
+                  <div className="text-zinc-400 italic text-xs py-4 text-center">Loading calculations data...</div>
+                )}
               </div>
 
               {/* Warranty Coverage details */}
@@ -335,8 +727,15 @@ export default function AssetDetailsPage() {
                     {isWarrantyActive ? `${warrantyDaysLeft} Days Remaining` : "Expired Coverage"}
                   </span>
                 </div>
-                <p className="text-xs text-zinc-400 leading-normal">
-                  Standard enterprise 3-year warranty support is automatically enabled from the acquisition date. Contact support vendors for repair cycles.
+                <p className="text-xs text-zinc-450 leading-normal">
+                  {asset.vendor ? (
+                    <>
+                      Warranty coverage is supported by vendor partner <strong>{asset.vendor.companyName}</strong>. 
+                      Contact representative <strong>{asset.vendor.contactPerson}</strong> at <strong>{asset.vendor.email}</strong> / <strong>{asset.vendor.phone}</strong> for invoice validation and repair tickets.
+                    </>
+                  ) : (
+                    "No vendor partner is linked to this asset. Contact the system administrator for warranty configurations."
+                  )}
                 </p>
               </div>
 
@@ -492,31 +891,40 @@ export default function AssetDetailsPage() {
                 )}
               </div>
 
-              {/* Activity Timeline */}
+              {/* Chronological Lifecycle Timeline */}
               <div className="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm">
-                <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-4 flex items-center gap-1.5">
-                  <Activity className="h-4 w-4" /> Complete Activity Timeline
+                <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-6 flex items-center gap-1.5 border-b border-zinc-150 pb-3">
+                  <Activity className="h-4 w-4" /> Chronological Lifecycle Timeline
                 </h3>
-                <div className="space-y-4 pl-3 border-l-2 border-zinc-200 text-xs">
-                  {activityLogs.length === 0 ? (
-                    <div className="text-zinc-400 italic">No activity records logged.</div>
+                <div className="relative border-l-2 border-zinc-200 ml-4 pl-6 space-y-6">
+                  {timelineEvents.length === 0 ? (
+                    <div className="text-zinc-400 italic text-xs py-2">No lifecycle events recorded for this asset.</div>
                   ) : (
-                    activityLogs.map((log) => (
-                      <div key={log.id} className="relative pl-3 space-y-1">
-                        <div className="absolute -left-[17px] top-1.5 h-2 w-2 rounded-full bg-zinc-950 border border-white" />
-                        <div className="font-bold text-zinc-900">
-                          {log.action.replace("_", " ")}
+                    timelineEvents.map((evt, idx) => {
+                      const { bg, icon } = getTimelineBadge(evt.type);
+                      return (
+                        <div key={idx} className="relative group">
+                          {/* Circle Icon Badge */}
+                          <div className={`absolute -left-[37px] top-0.5 h-6.5 w-6.5 rounded-full border flex items-center justify-center bg-white shadow-sm shrink-0 ${bg}`}>
+                            {icon}
+                          </div>
+                          
+                          {/* Event content */}
+                          <div className="space-y-1 select-none">
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
+                              <span className="font-bold text-zinc-950 text-xs">{evt.title}</span>
+                              <span className="text-[10px] text-zinc-400 font-medium">{new Date(evt.date).toLocaleString()}</span>
+                            </div>
+                            <p className="text-xs text-zinc-650 leading-relaxed">{evt.description}</p>
+                            {evt.user && (
+                              <div className="text-[10px] text-zinc-500 font-semibold flex items-center gap-1">
+                                <User className="h-3 w-3 text-zinc-400" /> By: {evt.user}
+                              </div>
+                            )}
+                          </div>
                         </div>
-                        {log.newValues?.text && (
-                          <p className="text-zinc-650 bg-zinc-50 border border-zinc-150 p-2 rounded-lg mt-1 italic">
-                            "{log.newValues.text}"
-                          </p>
-                        )}
-                        <div className="text-[10px] text-zinc-400">
-                          Logged by {log.user?.name || "System"} · {new Date(log.timestamp).toLocaleString()}
-                        </div>
-                      </div>
-                    ))
+                      );
+                    })
                   )}
                 </div>
               </div>
@@ -607,6 +1015,159 @@ export default function AssetDetailsPage() {
                   </div>
                 </div>
               )}
+
+            </div>
+          )}
+
+          {/* TAB 6: DOCUMENTS */}
+          {activeTab === "documents" && (
+            <div className="space-y-6">
+              
+              {/* Document upload form card */}
+              <div className="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm space-y-4 animate-in fade-in select-none">
+                <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <Upload className="h-4 w-4" /> Upload Asset Document
+                </h3>
+                <form onSubmit={handleUploadDoc} className="space-y-4 text-xs">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="space-y-1">
+                      <Label htmlFor="docType">Document Category</Label>
+                      <select
+                        id="docType"
+                        value={docUploadType}
+                        onChange={(e) => setDocUploadType(e.target.value)}
+                        className="w-full h-10 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs focus:outline-none cursor-pointer font-semibold text-zinc-800"
+                      >
+                        <option value="Purchase Invoice">Purchase Invoice</option>
+                        <option value="Warranty Card">Warranty Card</option>
+                        <option value="Insurance Certificate">Insurance Certificate</option>
+                        <option value="User Manual">User Manual</option>
+                        <option value="Compliance Certificate">Compliance Certificate</option>
+                      </select>
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label htmlFor="docFile">Choose File (PDF, DOCX, XLSX, Images - Max 10MB)</Label>
+                      <div className="flex items-center gap-2">
+                        <Input
+                          id="docFileInput"
+                          type="file"
+                          accept=".pdf,.png,.jpg,.jpeg,.webp,.docx,.xlsx"
+                          onChange={(e) => setDocFile(e.target.files?.[0] || null)}
+                          required
+                          className="h-10 text-xs py-1.5 cursor-pointer bg-zinc-50 border border-zinc-200 hover:bg-zinc-100"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <Button
+                    type="submit"
+                    disabled={submitting || !docFile}
+                    className="bg-zinc-950 hover:bg-zinc-900 text-white rounded-lg text-xs py-2 disabled:opacity-50 font-bold"
+                  >
+                    {submitting ? "Uploading file..." : "Upload Document"}
+                  </Button>
+                </form>
+              </div>
+
+              {/* Grouped Documents Registry List */}
+              <div className="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm space-y-6">
+                <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-wider flex items-center gap-1.5 border-b border-zinc-100 pb-3">
+                  <FileText className="h-4 w-4" /> Document Registry Grouped by Category
+                </h3>
+                {["Purchase Invoice", "Warranty Card", "Insurance Certificate", "User Manual", "Compliance Certificate"].map((category) => {
+                  const catDocs = documents.filter((d) => d.documentType === category);
+
+                  return (
+                    <div key={category} className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-black text-zinc-800 uppercase tracking-tight">{category}</span>
+                        <span className="text-[10px] font-black bg-zinc-100 border border-zinc-200 text-zinc-650 px-2 py-0.5 rounded-full shrink-0">
+                          {catDocs.length} {catDocs.length === 1 ? "file" : "files"}
+                        </span>
+                      </div>
+                      
+                      <div className="space-y-2">
+                        {catDocs.length === 0 ? (
+                          <div className="text-[11px] text-zinc-400 italic py-2 px-3 border border-dashed border-zinc-150 rounded-xl bg-zinc-50/20">
+                            No documents uploaded under this category.
+                          </div>
+                        ) : (
+                          catDocs.map((doc) => (
+                            <div key={doc.id} className="p-3.5 border border-zinc-200 bg-white hover:bg-zinc-50/20 rounded-xl flex items-center justify-between text-xs gap-4 shadow-sm hover:border-zinc-300 transition-colors">
+                              <div className="flex items-start gap-2.5 min-w-0">
+                                <FileText className="h-4 w-4 text-zinc-400 shrink-0 mt-0.5" />
+                                <div className="min-w-0">
+                                  <span className="font-bold text-zinc-900 block truncate" title={doc.fileName}>{doc.fileName}</span>
+                                  <div className="text-[10px] text-zinc-400 mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5 font-medium">
+                                    <span>{(doc.fileSize / 1024 / 1024).toFixed(2)} MB</span>
+                                    <span>•</span>
+                                    <span>Uploaded: {new Date(doc.createdAt).toLocaleDateString()}</span>
+                                    <span>•</span>
+                                    <span className="font-semibold text-zinc-500 font-sans">By: {doc.uploadedBy?.name || "System"}</span>
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-1.5 shrink-0 select-none">
+                                <button
+                                  type="button"
+                                  onClick={() => setPreviewDoc(doc)}
+                                  className="p-1.5 text-zinc-600 hover:bg-zinc-100 border border-zinc-200 hover:text-zinc-950 rounded flex items-center justify-center cursor-pointer shadow-sm bg-white"
+                                  title="Preview Document"
+                                >
+                                  <Eye className="h-3.5 w-3.5" />
+                                </button>
+                                <a
+                                  href={doc.filePath}
+                                  download={doc.fileName}
+                                  onClick={() => handleDownloadDoc(doc)}
+                                  className="p-1.5 text-zinc-650 hover:bg-zinc-100 border border-zinc-200 hover:text-zinc-950 rounded flex items-center justify-center cursor-pointer shadow-sm bg-white"
+                                  title="Download File"
+                                >
+                                  <Download className="h-3.5 w-3.5" />
+                                </a>
+                                <div className="relative">
+                                  <button
+                                    type="button"
+                                    onClick={() => setDocReplacingId(docReplacingId === doc.id ? null : doc.id)}
+                                    className="p-1.5 text-zinc-650 hover:bg-zinc-100 border border-zinc-200 hover:text-zinc-950 rounded flex items-center justify-center cursor-pointer shadow-sm bg-white"
+                                    title="Replace File"
+                                  >
+                                    <RefreshCw className="h-3.5 w-3.5" />
+                                  </button>
+                                  {docReplacingId === doc.id && (
+                                    <div className="absolute right-0 mt-1 bg-white border border-zinc-200 rounded-lg p-2 shadow-xl z-20 w-44 animate-in slide-in-from-top-1">
+                                      <input
+                                        type="file"
+                                        accept=".pdf,.png,.jpg,.jpeg,.webp,.docx,.xlsx"
+                                        onChange={(e) => {
+                                          const file = e.target.files?.[0];
+                                          if (file) handleReplaceDoc(doc.id, file);
+                                        }}
+                                        className="text-[10px] w-full cursor-pointer"
+                                      />
+                                    </div>
+                                  )}
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteDoc(doc.id)}
+                                  className="p-1.5 border border-red-200 text-red-600 hover:bg-red-50 rounded flex items-center justify-center cursor-pointer shadow-sm bg-white"
+                                  title="Delete Document"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
 
             </div>
           )}
@@ -706,6 +1267,276 @@ export default function AssetDetailsPage() {
         </div>
 
       </div>
+
+      {/* EDIT ASSET MODAL */}
+      {showEditModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-xl w-full border border-zinc-200 p-6 space-y-4 shadow-2xl max-h-[90vh] overflow-y-auto font-sans text-xs font-semibold">
+            <div className="flex items-center justify-between border-b border-zinc-100 pb-3 select-none">
+              <h2 className="text-sm font-black text-zinc-950 uppercase tracking-wider">Modify Asset Configuration</h2>
+              <button 
+                onClick={() => setShowEditModal(false)} 
+                className="text-zinc-400 hover:text-zinc-650 cursor-pointer font-bold text-lg"
+              >
+                ×
+              </button>
+            </div>
+
+            <form onSubmit={handleUpdateAsset} className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                
+                <div className="space-y-1 col-span-2">
+                  <Label htmlFor="editName">Asset Name</Label>
+                  <Input 
+                    id="editName" 
+                    value={editName} 
+                    onChange={(e) => setEditName(e.target.value)} 
+                    required 
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <Label htmlFor="editSerial">Serial Number</Label>
+                  <Input 
+                    id="editSerial" 
+                    value={editSerialNumber} 
+                    onChange={(e) => setEditSerialNumber(e.target.value)} 
+                    required 
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <Label htmlFor="editCategory">Category</Label>
+                  <select
+                    id="editCategory"
+                    value={editCategoryId}
+                    onChange={(e) => setEditCategoryId(e.target.value)}
+                    required
+                    className="w-full h-10 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm focus:outline-none cursor-pointer"
+                  >
+                    {categories.map((cat) => (
+                      <option key={cat.id} value={cat.id}>{cat.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <Label htmlFor="editAcqDate">Acquisition Date</Label>
+                  <Input 
+                    id="editAcqDate" 
+                    type="date" 
+                    value={editAcquisitionDate} 
+                    onChange={(e) => setEditAcquisitionDate(e.target.value)} 
+                    required 
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <Label htmlFor="editAcqCost">Cost (USD)</Label>
+                  <Input 
+                    id="editAcqCost" 
+                    type="number" 
+                    step="0.01" 
+                    value={editAcquisitionCost} 
+                    onChange={(e) => setEditAcquisitionCost(e.target.value)} 
+                    required 
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <Label htmlFor="editCond">Condition</Label>
+                  <select
+                    id="editCond"
+                    value={editCondition}
+                    onChange={(e: any) => setEditCondition(e.target.value)}
+                    className="w-full h-10 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm focus:outline-none cursor-pointer"
+                  >
+                    <option value="NEW">New</option>
+                    <option value="GOOD">Good</option>
+                    <option value="FAIR">Fair</option>
+                    <option value="POOR">Poor</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <Label htmlFor="editLoc">Location</Label>
+                  <Input 
+                    id="editLoc" 
+                    value={editLocation} 
+                    onChange={(e) => setEditLocation(e.target.value)} 
+                    required 
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <Label htmlFor="editDept">Department</Label>
+                  <select
+                    id="editDept"
+                    value={editDepartmentId}
+                    onChange={(e) => setEditDepartmentId(e.target.value)}
+                    className="w-full h-10 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm focus:outline-none cursor-pointer"
+                  >
+                    <option value="">No Department Restriction</option>
+                    {departments.map((d) => (
+                      <option key={d.id} value={d.id}>{d.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <Label htmlFor="editVendor">Vendor Partner</Label>
+                  <select
+                    id="editVendor"
+                    value={editVendorId}
+                    onChange={(e) => setEditVendorId(e.target.value)}
+                    className="w-full h-10 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm focus:outline-none cursor-pointer"
+                  >
+                    <option value="">No Vendor Partner</option>
+                    {vendors.map((v) => (
+                      <option key={v.id} value={v.id}>{v.companyName}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <Label htmlFor="editWarranty">Warranty (Months)</Label>
+                  <Input 
+                    id="editWarranty" 
+                    type="number" 
+                    value={editWarranty} 
+                    onChange={(e) => setEditWarranty(parseInt(e.target.value, 10))} 
+                    required 
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <Label htmlFor="editStatus">Status</Label>
+                  <select
+                    id="editStatus"
+                    value={editStatus}
+                    onChange={(e: any) => setEditStatus(e.target.value)}
+                    className="w-full h-10 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm focus:outline-none cursor-pointer"
+                  >
+                    <option value="AVAILABLE">Available</option>
+                    <option value="ALLOCATED">Allocated</option>
+                    <option value="RESERVED">Reserved</option>
+                    <option value="UNDER_MAINTENANCE">Under Maintenance</option>
+                    <option value="LOST">Lost</option>
+                    <option value="RETIRED">Retired</option>
+                    <option value="DISPOSED">Disposed</option>
+                  </select>
+                </div>
+
+                <div className="flex items-center space-x-2 pt-6 col-span-2">
+                  <input
+                    type="checkbox"
+                    id="editShared"
+                    checked={editIsSharedResource}
+                    onChange={(e) => setEditIsSharedResource(e.target.checked)}
+                    className="h-4 w-4 rounded border-zinc-300 text-zinc-950 focus:ring-zinc-950"
+                  />
+                  <Label htmlFor="editShared" className="cursor-pointer">Mark as Bookable Shared Resource</Label>
+                </div>
+              </div>
+
+              {/* Photo uploader */}
+              <div className="space-y-2">
+                <Label>Asset Photos</Label>
+                <div className="flex flex-wrap gap-2 items-center">
+                  <button
+                    type="button"
+                    onClick={() => editFileInputRef.current?.click()}
+                    className="flex h-16 w-16 flex-col items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-zinc-50 hover:bg-zinc-100 text-zinc-400 cursor-pointer"
+                  >
+                    <Plus className="h-4 w-4" />
+                    <span className="text-[8px] font-bold mt-1 uppercase">Add</span>
+                  </button>
+                  <input
+                    type="file"
+                    ref={editFileInputRef}
+                    multiple
+                    accept="image/*"
+                    onChange={handleEditImageChange}
+                    className="hidden"
+                  />
+                  {editImages.map((img, idx) => (
+                    <div key={idx} className="relative h-16 w-16 border border-zinc-200 rounded-lg overflow-hidden bg-zinc-100">
+                      <img src={img} alt="Thumbnail" className="object-cover h-full w-full" />
+                      <button
+                        type="button"
+                        onClick={() => setEditImages((prev) => prev.filter((_, i) => i !== idx))}
+                        className="absolute right-1 top-1 bg-black/60 rounded-full text-white p-0.5 hover:bg-black"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex gap-2 border-t border-zinc-100 pt-4">
+                <Button
+                  type="submit"
+                  className="flex-1 bg-zinc-950 hover:bg-zinc-900 text-white rounded-xl py-2.5 font-bold text-xs"
+                  disabled={submitting}
+                >
+                  {submitting ? "Updating..." : "Save Configuration"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => setShowEditModal(false)}
+                  className="border border-zinc-200 hover:bg-zinc-50 rounded-xl py-2.5 font-bold text-xs"
+                >
+                  Cancel
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Document Preview Modal */}
+      {previewDoc && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-3xl w-full border border-zinc-250 p-6 space-y-4 shadow-2xl h-[85vh] flex flex-col animate-in fade-in">
+            <div className="flex items-center justify-between border-b border-zinc-150 pb-3 shrink-0">
+              <h2 className="text-xs font-black text-zinc-950 uppercase truncate max-w-xs sm:max-w-md">{previewDoc.fileName} - Preview</h2>
+              <button type="button" onClick={() => setPreviewDoc(null)} className="text-zinc-400 hover:text-zinc-600 cursor-pointer">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="flex-1 min-h-0 bg-zinc-50 border border-zinc-200 rounded-xl overflow-hidden flex items-center justify-center">
+              {previewDoc.fileMime?.startsWith("image/") || previewDoc.filePath?.match(/\.(png|jpg|jpeg|webp)$/i) ? (
+                <img src={previewDoc.filePath} alt="Preview" className="max-w-full max-h-full object-contain" />
+              ) : previewDoc.fileMime === "application/pdf" || previewDoc.filePath?.endsWith(".pdf") ? (
+                <iframe src={previewDoc.filePath} className="w-full h-full" title="PDF Preview" />
+              ) : (
+                <div className="p-8 text-center text-zinc-400 font-bold text-xs">
+                  Preview not available for this format. Please download the file to view its contents.
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end pt-3 shrink-0 border-t border-zinc-150 gap-2">
+              <a
+                href={previewDoc.filePath}
+                download={previewDoc.fileName}
+                onClick={() => handleDownloadDoc(previewDoc)}
+                className="px-4 py-2 bg-zinc-950 text-white rounded-lg text-xs font-bold hover:bg-zinc-900 flex items-center justify-center"
+              >
+                Download Document
+              </a>
+              <button
+                type="button"
+                onClick={() => setPreviewDoc(null)}
+                className="px-4 py-2 border border-zinc-250 rounded-lg text-xs font-bold hover:bg-zinc-50 text-zinc-800"
+              >
+                Close Preview
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -12,6 +12,7 @@ import { Label } from "@/components/ui/label";
 import Link from "next/link";
 import DashboardQuickActions from "@/components/dashboard/DashboardQuickActions";
 import { transitionMaintenance } from "@/actions/maintenance";
+import { getExecutiveDashboardMetrics } from "@/actions/intelligence";
 
 interface DashboardWrapperProps {
   metrics: any;
@@ -57,6 +58,17 @@ export default function DashboardWrapper({
   const [landingPage, setLandingPage] = useState("/dashboard");
   const [cardSize, setCardSize] = useState<"compact" | "normal" | "spacious">("normal");
   const [showConfig, setShowConfig] = useState(false);
+
+  // Executive dashboard intelligence states
+  const [execMetrics, setExecMetrics] = useState<any>(null);
+
+  useEffect(() => {
+    if (["ADMIN", "ASSET_MANAGER"].includes(role)) {
+      getExecutiveDashboardMetrics().then((data) => {
+        setExecMetrics(data);
+      });
+    }
+  }, [role]);
 
   // Widget layout order config
   const [widgets, setWidgets] = useState<WidgetConfig[]>([]);
@@ -290,6 +302,34 @@ export default function DashboardWrapper({
         </div>
       )}
 
+      {/* Preventive Maintenance Alert Panel */}
+      {metrics?.preventiveAlerts?.count > 0 && (
+        <div className="rounded-2xl border border-red-200 bg-red-50/30 p-6 shadow-sm flex flex-col sm:flex-row items-start justify-between text-xs font-semibold gap-4 animate-in fade-in select-none">
+          <div className="flex items-start gap-2.5">
+            <AlertTriangle className="h-5 w-5 text-red-650 shrink-0 mt-0.5" />
+            <div>
+              <span className="font-black text-red-800 block text-sm tracking-tight">Preventive Maintenance Schedules Overdue / Due Today</span>
+              <p className="text-zinc-500 mt-0.5 font-bold">There are {metrics.preventiveAlerts.count} maintenance schedules that require immediate attention.</p>
+              <div className="mt-3 space-y-2">
+                {metrics.preventiveAlerts.schedules.map((s: any) => (
+                  <div key={s.id} className="flex flex-wrap items-center gap-1.5 text-zinc-700">
+                    <span className="font-mono bg-red-100/80 text-red-750 px-1.5 py-0.2 border border-red-200 rounded text-[10px] font-bold">{s.asset.tag}</span>
+                    <span className="font-bold text-zinc-800">{s.asset.name}</span>
+                    <span className="text-zinc-400 font-normal">•</span>
+                    <span className="text-zinc-650 font-bold">{s.maintenanceType}</span>
+                    <span className="text-zinc-400 font-normal">due on</span>
+                    <span className="font-bold text-red-700">{new Date(s.nextDueDate).toLocaleDateString()}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+          <Link href="/dashboard/maintenance?tab=preventive" className="text-zinc-950 hover:underline font-black self-end shrink-0 border border-zinc-950 rounded-lg px-3 py-1.5 bg-white shadow-sm inline-flex items-center gap-1">
+            <span>Manage Schedules</span> &rarr;
+          </Link>
+        </div>
+      )}
+
       {/* Render widget panels based on prioritized ordering configuration */}
       <div className="space-y-6">
         {widgets.map((widget) => {
@@ -326,16 +366,37 @@ export default function DashboardWrapper({
               {widget.id === "admin_kpis" && (
                 <div className={paddingClass}>
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 select-none">
-                    <div className="border border-zinc-150 p-4 rounded-xl space-y-1">
+                    
+                    {/* Card 1: Assets Value */}
+                    <div className="border border-zinc-150 p-4 rounded-xl space-y-1 bg-white shadow-sm">
                       <div className="flex items-center justify-between text-[10px] font-black text-zinc-400 uppercase tracking-wider">
-                        <span>Enterprise Assets</span>
+                        <span>Original Asset Value</span>
                         <Database className="h-4 w-4 text-zinc-400" />
                       </div>
                       <div className={`${textClass} font-black text-zinc-950 tracking-tight`}>
-                        {metrics?.kpis?.assetsAvailable + metrics?.kpis?.assetsAllocated || 0}
+                        ${execMetrics?.assetValue?.original ? execMetrics.assetValue.original.toLocaleString(undefined, { maximumFractionDigits: 0 }) : "..."}
+                      </div>
+                      <div className="text-[10px] text-zinc-500 font-semibold">
+                        Roster count: {metrics?.kpis?.assetsAvailable + metrics?.kpis?.assetsAllocated || 0} items
                       </div>
                     </div>
-                    <div className="border border-zinc-150 p-4 rounded-xl space-y-1">
+
+                    {/* Card 2: Net Book Value after Depreciation */}
+                    <div className="border border-zinc-150 p-4 rounded-xl space-y-1 bg-white shadow-sm">
+                      <div className="flex items-center justify-between text-[10px] font-black text-zinc-400 uppercase tracking-wider">
+                        <span>Net Depreciated Value</span>
+                        <DollarSign className="h-4 w-4 text-zinc-400" />
+                      </div>
+                      <div className={`${textClass} font-black text-emerald-800 tracking-tight`}>
+                        ${execMetrics?.assetValue?.current ? execMetrics.assetValue.current.toLocaleString(undefined, { maximumFractionDigits: 0 }) : "..."}
+                      </div>
+                      <div className="text-[10px] text-red-650 font-semibold">
+                        Accumulated: -${execMetrics?.assetValue?.accumulatedDepreciation ? execMetrics.assetValue.accumulatedDepreciation.toLocaleString(undefined, { maximumFractionDigits: 0 }) : "..."}
+                      </div>
+                    </div>
+
+                    {/* Card 3: Headcount Directory & Bookings */}
+                    <div className="border border-zinc-150 p-4 rounded-xl space-y-1 bg-white shadow-sm">
                       <div className="flex items-center justify-between text-[10px] font-black text-zinc-400 uppercase tracking-wider">
                         <span>Active Bookings</span>
                         <Calendar className="h-4 w-4 text-zinc-400" />
@@ -343,23 +404,25 @@ export default function DashboardWrapper({
                       <div className={`${textClass} font-black text-zinc-950 tracking-tight`}>
                         {metrics?.kpis?.activeBookings || 0}
                       </div>
+                      <div className="text-[10px] text-zinc-500 font-semibold">
+                        Clearance Users: {execMetrics?.activeUsers || 0} active
+                      </div>
                     </div>
-                    <div className="border border-zinc-150 p-4 rounded-xl space-y-1">
+
+                    {/* Card 4: Audit Status */}
+                    <div className="border border-zinc-150 p-4 rounded-xl space-y-1 bg-white shadow-sm">
                       <div className="flex items-center justify-between text-[10px] font-black text-zinc-400 uppercase tracking-wider">
-                        <span>Overdue Warnings</span>
-                        <AlertTriangle className="h-4 w-4 text-zinc-400" />
+                        <span>Audit Progress</span>
+                        <Shield className="h-4 w-4 text-zinc-450" />
                       </div>
                       <div className={`${textClass} font-black text-zinc-950 tracking-tight`}>
-                        {metrics?.overdueReturns?.length || 0}
+                        {execMetrics?.audit?.progressPct !== undefined ? `${execMetrics.audit.progressPct}%` : "0%"}
+                      </div>
+                      <div className="text-[10px] text-indigo-650 font-semibold truncate" title={execMetrics?.audit?.cycleName}>
+                        {execMetrics?.audit?.cycleName || "No active cycles"}
                       </div>
                     </div>
-                    <div className="border border-zinc-150 p-4 rounded-xl space-y-1">
-                      <div className="flex items-center justify-between text-[10px] font-black text-zinc-400 uppercase tracking-wider">
-                        <span>System Health</span>
-                        <Activity className="h-4 w-4 text-zinc-400 animate-pulse" />
-                      </div>
-                      <div className={`${textClass} font-black text-zinc-950 tracking-tight`}>99.9%</div>
-                    </div>
+
                   </div>
                 </div>
               )}

@@ -12,7 +12,8 @@ export type SystemResource =
   | "AUDITS"
   | "REPORTS"
   | "LOGS"
-  | "SETTINGS";
+  | "SETTINGS"
+  | "VENDORS";
 
 // Core Operations / Actions
 export type ResourceAction =
@@ -39,6 +40,7 @@ const PERMISSION_MATRIX: Record<Role, Partial<Record<SystemResource, ResourceAct
     REPORTS: ["READ", "EXPORT"],
     LOGS: ["READ", "EXPORT"],
     SETTINGS: ["READ", "UPDATE"],
+    VENDORS: ["CREATE", "READ", "UPDATE", "DELETE", "EXPORT"],
   },
   ASSET_MANAGER: {
     DEPARTMENTS: ["READ"],
@@ -52,6 +54,7 @@ const PERMISSION_MATRIX: Record<Role, Partial<Record<SystemResource, ResourceAct
     REPORTS: ["READ", "EXPORT"],
     LOGS: ["READ"],
     SETTINGS: ["READ", "UPDATE"],
+    VENDORS: ["CREATE", "READ", "UPDATE", "DELETE", "EXPORT"],
   },
   DEPARTMENT_HEAD: {
     DEPARTMENTS: ["READ"],
@@ -62,6 +65,7 @@ const PERMISSION_MATRIX: Record<Role, Partial<Record<SystemResource, ResourceAct
     MAINTENANCE: ["READ"],
     REPORTS: ["READ"],
     SETTINGS: ["READ", "UPDATE"],
+    VENDORS: ["READ"],
   },
   EMPLOYEE: {
     ASSETS: ["READ"],
@@ -69,6 +73,7 @@ const PERMISSION_MATRIX: Record<Role, Partial<Record<SystemResource, ResourceAct
     BOOKINGS: ["CREATE", "READ", "DELETE"],
     MAINTENANCE: ["CREATE", "READ"],
     SETTINGS: ["READ", "UPDATE"],
+    VENDORS: ["READ"],
   },
 };
 

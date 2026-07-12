@@ -58,6 +58,8 @@ export async function createAsset(data: {
   images: string[];
   isSharedResource: boolean;
   departmentId?: string | null;
+  vendorId?: string | null;
+  warranty?: number | null;
 }): Promise<ActionResponse> {
   try {
     const adminOrManagerId = await verifyAuthorized();
@@ -104,6 +106,8 @@ export async function createAsset(data: {
           images: data.images,
           isSharedResource: data.isSharedResource,
           departmentId: data.departmentId || null,
+          vendorId: data.vendorId || null,
+          warranty: data.warranty !== undefined && data.warranty !== null ? parseInt(data.warranty.toString(), 10) : 24,
         },
       });
 
@@ -186,6 +190,8 @@ export async function getAssets(filters?: {
         location: true,
         isSharedResource: true,
         departmentId: true,
+        vendorId: true,
+        warranty: true,
         category: {
           select: {
             id: true,
@@ -196,6 +202,13 @@ export async function getAssets(filters?: {
           select: {
             id: true,
             name: true,
+          },
+        },
+        vendor: {
+          select: {
+            id: true,
+            companyName: true,
+            contactPerson: true,
           },
         },
         currentHolder: {
@@ -223,6 +236,7 @@ export async function getAssetDetails(assetId: string) {
       include: {
         category: true,
         department: true,
+        vendor: true,
         currentHolder: {
           select: { id: true, name: true, email: true },
         },
@@ -655,6 +669,101 @@ export async function getCategoryDetails(categoryId: string) {
   } catch (err) {
     console.error(err);
     return null;
+  }
+}
+
+export async function updateAsset(
+  assetId: string,
+  data: {
+    name: string;
+    categoryId: string;
+    serialNumber: string;
+    acquisitionDate: Date;
+    acquisitionCost: number;
+    condition: AssetCondition;
+    location: string;
+    images: string[];
+    documents?: string[];
+    isSharedResource: boolean;
+    departmentId?: string | null;
+    vendorId?: string | null;
+    warranty?: number | null;
+    status?: AssetStatus;
+  }
+): Promise<ActionResponse> {
+  try {
+    const adminOrManagerId = await verifyAuthorized();
+    if (!adminOrManagerId) {
+      return { success: false, message: "Unauthorized. Asset Manager or Admin privileges required." };
+    }
+
+    const current = await db.asset.findUnique({
+      where: { id: assetId },
+    });
+
+    if (!current || current.deletedAt !== null) {
+      return { success: false, message: "Asset not found." };
+    }
+
+    // Business rule: Cannot edit disposed asset.
+    if (current.status === AssetStatus.DISPOSED) {
+      return { success: false, message: "Cannot edit an asset that has been disposed." };
+    }
+
+    // Check serial number uniqueness if changed
+    if (data.serialNumber.trim() !== current.serialNumber) {
+      const existing = await db.asset.findFirst({
+        where: {
+          serialNumber: data.serialNumber.trim(),
+          id: { not: assetId },
+          deletedAt: null,
+        },
+      });
+      if (existing) {
+        return { success: false, message: "An asset with this serial number already exists." };
+      }
+    }
+
+    const result = await db.$transaction(async (tx) => {
+      const updated = await tx.asset.update({
+        where: { id: assetId },
+        data: {
+          name: data.name.trim(),
+          categoryId: data.categoryId,
+          serialNumber: data.serialNumber.trim(),
+          acquisitionDate: new Date(data.acquisitionDate),
+          acquisitionCost: data.acquisitionCost,
+          condition: data.condition,
+          location: data.location.trim(),
+          images: data.images,
+          documents: data.documents || current.documents,
+          isSharedResource: data.isSharedResource,
+          departmentId: data.departmentId || null,
+          vendorId: data.vendorId || null,
+          warranty: data.warranty !== undefined && data.warranty !== null ? parseInt(data.warranty.toString(), 10) : 24,
+          status: data.status || current.status,
+        },
+      });
+
+      // Write Activity Log
+      await tx.activityLog.create({
+        data: {
+          userId: adminOrManagerId,
+          action: "UPDATE_ASSET",
+          entityType: "Asset",
+          entityId: assetId,
+          previousValues: serializeAsset(current),
+          newValues: serializeAsset(updated),
+        },
+      });
+
+      return updated;
+    }, { maxWait: 15000, timeout: 20000 });
+
+    return { success: true, message: "Asset updated successfully.", data: serializeAsset(result) };
+  } catch (error: any) {
+    console.error("Failed to update asset:", error);
+    return { success: false, message: error.message || "Failed to update asset." };
   }
 }
 

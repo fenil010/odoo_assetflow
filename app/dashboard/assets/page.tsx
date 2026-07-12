@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { getAssets, createAsset, getAssetDetails, deleteAsset, importAssetsAction, bulkDeleteAssets, bulkChangeAssetsDept, bulkChangeAssetsCategory, bulkChangeAssetsStatus, bulkUpdateAssetsCondition } from "@/actions/assets";
 import { getCategories, getDepartments } from "@/actions/org";
 import { allocateAsset, returnAsset, requestAssetTransfer, getTransferTargets } from "@/actions/allocations";
+import { getVendors } from "@/actions/vendors";
 import { AssetStatus, AssetCondition } from "@prisma/client";
 import { exportToCSV, parseCSV } from "@/utils/csv";
 import Link from "next/link";
@@ -21,18 +22,24 @@ export default function AssetsPage() {
   const [assets, setAssets] = useState<any[]>([]);
   const [categories, setCategories] = useState<any[]>([]);
   const [departments, setDepartments] = useState<any[]>([]);
+  const [transferTargets, setTransferTargets] = useState<any[]>([]);
+  const [vendors, setVendors] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
   
   // Search & Filter
   const [search, setSearch] = useState("");
   const [categoryId, setCategoryId] = useState("");
   const [status, setStatus] = useState<string>("");
   
+  // Register Asset Form states
+  const [formVendorId, setFormVendorId] = useState("");
+  const [warranty, setWarranty] = useState("24");
+
   // Modals & Panels
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
   const [detailedAsset, setDetailedAsset] = useState<any | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [showTagModal, setShowTagModal] = useState(false);
-  const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
 
   // Bulk Operations State & Actions
@@ -224,7 +231,6 @@ export default function AssetsPage() {
   const [submitting, setSubmitting] = useState(false);
 
   // Action Form States
-  const [transferTargets, setTransferTargets] = useState<{ id: string; name: string; email: string; department: string | null }[]>([]);
   const [allocTargetUserId, setAllocTargetUserId] = useState("");
   const [allocReturnDate, setAllocReturnDate] = useState("");
   const [returnCondition, setReturnCondition] = useState<AssetCondition>("GOOD");
@@ -262,14 +268,16 @@ export default function AssetsPage() {
   useEffect(() => {
     const loadMaster = async () => {
       try {
-        const [cats, depts, targets] = await Promise.all([
+        const [cats, depts, targets, vends] = await Promise.all([
           getCategories(),
           getDepartments(),
           getTransferTargets(),
+          getVendors({ status: "ACTIVE" }),
         ]);
         setCategories(cats || []);
         setDepartments(depts || []);
         setTransferTargets(targets || []);
+        setVendors(vends || []);
       } catch (err) {
         console.error(err);
       }
@@ -325,29 +333,34 @@ export default function AssetsPage() {
         categoryId: formCategoryId,
         serialNumber,
         acquisitionDate: new Date(acquisitionDate),
-        acquisitionCost: parseFloat(acquisitionCost) || 0,
+        acquisitionCost: parseFloat(acquisitionCost),
         condition,
         location,
         images,
         isSharedResource,
         departmentId: formDeptId || null,
+        vendorId: formVendorId || null,
+        warranty: warranty ? parseInt(warranty, 10) : 24,
       });
 
       if (res.success) {
         setSuccess(res.message || "Asset registered.");
-        // Reset form
+        // Clear
         setName("");
-        setFormCategoryId("");
         setSerialNumber("");
+        setFormCategoryId("");
         setAcquisitionDate("");
         setAcquisitionCost("");
-        setCondition("NEW");
+        setCondition(AssetCondition.NEW);
         setLocation("");
         setIsSharedResource(false);
         setFormDeptId("");
+        setFormVendorId("");
+        setWarranty("24");
         setImages([]);
         setShowAddModal(false);
-        await loadAssets();
+        // reload
+        loadAssets();
       } else {
         setError(res.message || "Failed to register asset.");
       }
@@ -1190,6 +1203,33 @@ export default function AssetsPage() {
                       <option key={dept.id} value={dept.id}>{dept.name}</option>
                     ))}
                   </select>
+                </div>
+
+                <div className="space-y-1">
+                  <Label htmlFor="formVendor">Vendor Partner</Label>
+                  <select
+                    id="formVendor"
+                    value={formVendorId}
+                    onChange={(e) => setFormVendorId(e.target.value)}
+                    className="w-full h-10 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm focus:outline-none cursor-pointer"
+                  >
+                    <option value="">No Vendor Partner</option>
+                    {vendors.map((v) => (
+                      <option key={v.id} value={v.id}>{v.companyName}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <Label htmlFor="warranty">Warranty (Months)</Label>
+                  <Input
+                    id="warranty"
+                    type="number"
+                    value={warranty}
+                    onChange={(e) => setWarranty(e.target.value)}
+                    placeholder="e.g. 24"
+                    required
+                  />
                 </div>
 
                 <div className="flex items-center space-x-2 pt-6">
