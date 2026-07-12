@@ -10,7 +10,27 @@ import { getAssets, createAsset, getAssetDetails, deleteAsset, importAssetsActio
 import { getCategories, getDepartments } from "@/actions/org";
 import { allocateAsset, returnAsset, requestAssetTransfer, getTransferTargets } from "@/actions/allocations";
 import { getVendors } from "@/actions/vendors";
-import { AssetStatus, AssetCondition } from "@prisma/client";
+// Inline enum mirrors — keeps @prisma/client out of the client bundle
+const AssetStatus = {
+  AVAILABLE: "AVAILABLE",
+  ALLOCATED: "ALLOCATED",
+  RESERVED: "RESERVED",
+  UNDER_MAINTENANCE: "UNDER_MAINTENANCE",
+  RETIRED: "RETIRED",
+  DISPOSED: "DISPOSED",
+  LOST: "LOST",
+} as const;
+type AssetStatus = (typeof AssetStatus)[keyof typeof AssetStatus];
+
+const AssetCondition = {
+  NEW: "NEW",
+  GOOD: "GOOD",
+  FAIR: "FAIR",
+  POOR: "POOR",
+  DAMAGED: "DAMAGED",
+} as const;
+type AssetCondition = (typeof AssetCondition)[keyof typeof AssetCondition];
+
 import { exportToCSV, parseCSV } from "@/utils/csv";
 import Link from "next/link";
 
@@ -334,7 +354,8 @@ export default function AssetsPage() {
         serialNumber,
         acquisitionDate: new Date(acquisitionDate),
         acquisitionCost: parseFloat(acquisitionCost),
-        condition,
+        condition: condition as any,
+
         location,
         images,
         isSharedResource,
@@ -439,7 +460,8 @@ export default function AssetsPage() {
     try {
       const res = await returnAsset({
         assetId: detailedAsset.id,
-        conditionOnReturn: returnCondition,
+        conditionOnReturn: returnCondition as any,
+
         checkInNotes: returnNotes || undefined,
       });
       if (res.success) {

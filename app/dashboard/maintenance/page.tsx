@@ -18,7 +18,25 @@ import {
   updateScheduleStatus, 
   performScheduledMaintenance 
 } from "@/actions/preventiveMaintenance";
-import { MaintenancePriority, MaintenanceStatus } from "@prisma/client";
+// Inline enum mirrors — keeps @prisma/client out of the client bundle
+const MaintenancePriority = {
+  LOW: "LOW",
+  MEDIUM: "MEDIUM",
+  HIGH: "HIGH",
+  CRITICAL: "CRITICAL",
+} as const;
+type MaintenancePriority = (typeof MaintenancePriority)[keyof typeof MaintenancePriority];
+
+const MaintenanceStatus = {
+  PENDING: "PENDING",
+  APPROVED: "APPROVED",
+  REJECTED: "REJECTED",
+  TECHNICIAN_ASSIGNED: "TECHNICIAN_ASSIGNED",
+  IN_PROGRESS: "IN_PROGRESS",
+  RESOLVED: "RESOLVED",
+  CLOSED: "CLOSED",
+} as const;
+type MaintenanceStatus = (typeof MaintenanceStatus)[keyof typeof MaintenanceStatus];
 
 export default function MaintenancePage() {
   const { data: session } = useSession();
@@ -122,7 +140,8 @@ export default function MaintenancePage() {
       const res = await createMaintenanceRequest({
         assetId: selectedAssetId,
         issueDescription,
-        priority,
+        priority: priority as any,
+
       });
 
       if (res.success) {

@@ -16,7 +16,16 @@ import {
 } from "@/actions/bookings";
 import { getAssets } from "@/actions/assets";
 import { getEmployees } from "@/actions/org";
-import { BookingStatus } from "@prisma/client";
+// Inline enum mirror — keeps @prisma/client out of the client bundle
+const BookingStatus = {
+  PENDING: "PENDING",
+  UPCOMING: "UPCOMING",
+  ONGOING: "ONGOING",
+  COMPLETED: "COMPLETED",
+  CANCELLED: "CANCELLED",
+} as const;
+type BookingStatus = (typeof BookingStatus)[keyof typeof BookingStatus];
+
 
 type CalendarView = "day" | "week" | "month" | "timeline" | "agenda";
 

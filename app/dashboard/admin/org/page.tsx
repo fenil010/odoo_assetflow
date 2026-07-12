@@ -3,7 +3,15 @@
 import React, { useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { Role } from "@prisma/client";
+// Inline enum mirror — keeps @prisma/client out of the client bundle
+const Role = {
+  ADMIN: "ADMIN",
+  ASSET_MANAGER: "ASSET_MANAGER",
+  DEPARTMENT_HEAD: "DEPARTMENT_HEAD",
+  EMPLOYEE: "EMPLOYEE",
+} as const;
+type Role = (typeof Role)[keyof typeof Role];
+
 import { Plus, Trash2, Edit2, ShieldAlert, Award, UserMinus, ToggleLeft, UserCheck, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

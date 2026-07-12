@@ -7,7 +7,16 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { allocateAsset, returnAsset } from "@/actions/allocations";
-import { AssetCondition } from "@prisma/client";
+// Inline enum mirror — keeps @prisma/client out of the client bundle
+const AssetCondition = {
+  NEW: "NEW",
+  GOOD: "GOOD",
+  FAIR: "FAIR",
+  POOR: "POOR",
+  DAMAGED: "DAMAGED",
+} as const;
+type AssetCondition = (typeof AssetCondition)[keyof typeof AssetCondition];
+
 
 interface DashboardQuickActionsProps {
   assets: any[];
